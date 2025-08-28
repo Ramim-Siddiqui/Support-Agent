@@ -1,0 +1,22 @@
+[project]
+name = "support-agent-langgraph"
+version = "0.1.0"
+description = "Support ticket resolution agent with multi-step review loop (LangGraph + Gemini)"
+requires-python = ">=3.11"
+dependencies = [
+  "langgraph>=0.2.35",
+  "langchain>=0.2.16",
+  "langchain-google-genai",
+  "langchain-chroma",
+  "google-generativeai",
+  "pydantic>=2.7",
+  "python-dotenv>=1.0"
+]
+
+[build-system]
+requires = ["setuptools>=67.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app"]
+exclude = ["data"]
