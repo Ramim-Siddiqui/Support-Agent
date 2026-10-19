@@ -25,8 +25,8 @@ flowchart LR
 | --- | --- |
 | `classify` | Keyword matching on subject + description assigns one of `Billing`, `Technical`, `Security`, `General` (default `General`). |
 | `retrieve` | Similarity search (top 3) against the Chroma vector store for that category, using Gemini embeddings (`app/rag.py`). |
-| `draft` | Calls `gemini-1.5-flash` (temperature 0.2) with the ticket and retrieved context, instructing it to stay grounded in the context and never promise refunds. |
-| `review` | Rule-based checks: no refund promise without "escalate"/"approval", must open with a greeting (`hi`/`hello`), must contain a `- ` bullet grounded in context, and must be at least 40 characters. Rejections increment `attempts`. |
+| `draft` | Calls `gemini-2.5-flash` (temperature 0.2) with the ticket and retrieved context, instructing it to open with a greeting, present the grounded facts as `- ` bullet points followed by next steps, and never promise refunds. |
+| `review` | Rule-based checks: no refund promise without "escalate"/"approval", must open with a greeting (`hi`/`hello`/`hey`/`dear` as a whole word within the first 40 characters), must contain a `- ` bullet grounded in context, and must be at least 40 characters. Rejections increment `attempts`. |
 | `refine` | Appends the longer words from the reviewer feedback to the query and re-retrieves context, then loops back to `draft`. |
 | `escalate` | After two rejected drafts, appends the ticket, all drafts, reviews, queries and context to `data/escalation_log.csv`. |
 
@@ -36,7 +36,7 @@ State is a `TypedDict` (`app/types.py`). List fields such as `queries`, `context
 
 - Python 3.11+
 - [LangGraph](https://github.com/langchain-ai/langgraph) for the state graph and routing
-- [LangChain](https://github.com/langchain-ai/langchain) + `langchain-google-genai` for Gemini chat (`gemini-1.5-flash`) and embeddings (`models/embedding-001`)
+- [LangChain](https://github.com/langchain-ai/langchain) + `langchain-google-genai` for Gemini chat (`gemini-2.5-flash`) and embeddings (`models/gemini-embedding-001`)
 - [Chroma](https://github.com/chroma-core/chroma) via `langchain-chroma` as the vector store
 - LangGraph CLI / Studio (`langgraph dev`) for local development
 
@@ -122,7 +122,7 @@ print(result["draft"])
 print("\n".join(result["history"]))
 ```
 
-The first run creates `.chroma_<Category>/` directories in the working directory for the persisted vector stores.
+The first run creates `.chroma_<Category>/` directories in the working directory for the persisted vector stores; later runs open the existing stores and only add the sample documents if a collection is empty.
 
 ## Example
 
@@ -130,23 +130,16 @@ For the billing ticket above, the run proceeds as:
 
 ```
 classify -> Billing
-retrieval -> 3 docs
+retrieval -> 2 docs
 draft -> generated (Gemini)
-review -> rejected
-refine -> new docs from feedback
-draft -> generated (Gemini)
-review -> rejected
-escalate -> logged to escalation_log.csv
+review -> approved
 ```
 
-The retrieved context contains "Refunds require approval from Billing; never promise refunds in replies", so Gemini drafts a reply that says it will escalate to Billing for approval rather than promising a refund. The rule-based reviewer still rejects the draft because it contains no `- ` bullet, and after two attempts the ticket is written to `data/escalation_log.csv` with every draft, review, query and context snippet attached, ready for a human agent.
+The retrieved context contains "Refunds require approval from Billing; never promise refunds in replies", so Gemini drafts a greeting followed by `- ` bullets that say the duplicate charge will be escalated to Billing for approval rather than promising a refund, and the rule-based reviewer approves it. If a draft fails review (for example by promising a refund), the graph runs `refine -> draft -> review` again, and after two rejections the ticket is written to `data/escalation_log.csv` with every draft, review, query and context snippet attached, ready for a human agent.
 
 ## Limitations / next steps
 
 - **Keyword classifier.** `classify` counts keyword hits per category; it has no fallback to the LLM and is easy to misroute. Swapping in an LLM or embedding-based classifier would be the first improvement.
-- **Heuristic reviewer.** `review` uses substring checks (for example `"hi" in draft` also matches "this"), and it requires a `- ` bullet that the draft prompt never asks for, so most drafts are rejected and escalated. Either align the prompt with the rules or replace the rules with an LLM-as-judge review.
-- **Sample knowledge base built at import time.** `app/rag.py` holds eight hard-coded snippets and rebuilds the Chroma stores every time the module is imported, so documents are re-added to the persisted `.chroma_*` directories on each import and can appear duplicated in retrieval results. A real deployment would load documents from a source and build the index once.
 - **Context accumulates across retries.** Because `context` uses an additive reducer, the second draft sees the first retrieval's documents plus the refined ones.
-- **Model names.** The code pins `gemini-1.5-flash` and `models/embedding-001`, which Google has since deprecated. Update the model IDs in `app/nodes.py` and `app/rag.py` (for example to `gemini-2.5-flash` and `gemini-embedding-001`) if API calls fail.
 - **No tests.** There is no automated test suite; unit tests for the routing function and the review rules would be straightforward to add.
 - **Escalation log is a CSV.** Fine for a demo; a queue or ticketing-system integration would replace it in practice.

@@ -6,9 +6,9 @@ requires-python = ">=3.11"
 dependencies = [
   "langgraph>=0.2.35",
   "langchain>=0.2.16",
+  "langchain-core",
   "langchain-google-genai",
   "langchain-chroma",
-  "google-generativeai",
   "pydantic>=2.7",
   "python-dotenv>=1.0"
 ]

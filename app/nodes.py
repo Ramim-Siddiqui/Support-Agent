@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, csv, pathlib
+import os, re, csv, pathlib
 from langchain_google_genai import ChatGoogleGenerativeAI
 from .types import State, Category
 from .rag import retrieve
@@ -31,7 +31,7 @@ def draft(state: State) -> dict:
     ticket = {"subject": state.get("subject",""), "description": state.get("description","")}
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         temperature=0.2,
         api_key=os.getenv("GOOGLE_API_KEY")
     )
@@ -39,6 +39,8 @@ def draft(state: State) -> dict:
     prompt = (
         "You are a helpful support agent. "
         "Write a concise, friendly reply grounded ONLY in the context. "
+        "Start with a greeting (e.g. \"Hi\"), then present the relevant facts from the "
+        "context as bullet points that each start with \"- \", followed by next steps. "
         "If the user asks for a refund, do NOT promise refunds; "
         "say you will escalate to Billing for approval.\n\n"
         f"Ticket: {ticket}\n\nContext:\n- " + "\n- ".join(context)
@@ -54,7 +56,7 @@ def review(state: State) -> dict:
     if "refund" in draft and "escalate" not in draft and "approval" not in draft:
         approved, feedback = False, ["Do not promise refunds; escalate to Billing."]
 
-    if "hi" not in draft and "hello" not in draft:
+    if re.search(r"\b(hi|hello|hey|dear)\b", draft[:40]) is None:
         approved, feedback = False, feedback + ["Start with a friendly greeting."]
 
     if "- " not in draft:
@@ -94,7 +96,6 @@ def escalate(state: State) -> dict:
         "context": " | ".join(state.get("context", [])),
     }
     with open(path, "a", newline="", encoding="utf-8") as f:
-        import csv
         writer = csv.DictWriter(f, fieldnames=row.keys())
         if not exists: writer.writeheader()
         writer.writerow(row)

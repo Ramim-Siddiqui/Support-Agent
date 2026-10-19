@@ -1,11 +1,11 @@
 import os
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 # Gemini embeddings
 embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/embedding-001",
+    model="models/gemini-embedding-001",
     api_key=os.getenv("GOOGLE_API_KEY")
 )
 
@@ -29,13 +29,19 @@ KB_DOCS = {
     ]
 }
 
-# Build vectorstores
+def _is_empty(store: Chroma) -> bool:
+    try:
+        return store._collection.count() == 0
+    except Exception:
+        return True
+
+# Open persisted vectorstores; only add the KB docs when a collection is empty
 vectorstores = {}
 for cat, texts in KB_DOCS.items():
-    docs = [Document(page_content=t) for t in texts]
-    vectorstores[cat] = Chroma.from_documents(
-        docs, embedding=embeddings, persist_directory=f".chroma_{cat}"
-    )
+    store = Chroma(persist_directory=f".chroma_{cat}", embedding_function=embeddings)
+    if _is_empty(store):
+        store.add_documents([Document(page_content=t) for t in texts])
+    vectorstores[cat] = store
 
 def retrieve(category: str, query: str, top_k: int = 3):
     retriever = vectorstores.get(category)
