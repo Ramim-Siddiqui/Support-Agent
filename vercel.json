@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "support-agent": {
+      "root": ".",
+      "entrypoint": "server:app"
+    }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": { "type": "service", "service": "support-agent" } }
+  ]
+}

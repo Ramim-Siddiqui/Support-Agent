@@ -2,6 +2,8 @@
 
 A small agentic workflow that takes a support ticket (subject + description), classifies it, retrieves relevant knowledge-base snippets, drafts a reply with Google Gemini, and then runs the draft through an automated review loop. If the draft fails review twice, the ticket is escalated and logged for a human. Built with LangGraph so the whole flow is an explicit, inspectable state graph.
 
+**Live demo:** https://support-ticket-agent.vercel.app (type a ticket and watch the agent classify, retrieve, draft and review it)
+
 **Demo video:** https://drive.google.com/file/d/1eej4YwopIwttdGmlsldtZUGUMug5ah-s/view?usp=sharing
 
 ## How it works
@@ -24,8 +26,8 @@ flowchart LR
 | Node | What it does (see `app/nodes.py`) |
 | --- | --- |
 | `classify` | Keyword matching on subject + description assigns one of `Billing`, `Technical`, `Security`, `General` (default `General`). |
-| `retrieve` | Similarity search (top 3) against the Chroma vector store for that category, using Gemini embeddings (`app/rag.py`). |
-| `draft` | Calls `gemini-2.5-flash` (temperature 0.2) with the ticket and retrieved context, instructing it to open with a greeting, present the grounded facts as `- ` bullet points followed by next steps, and never promise refunds. |
+| `retrieve` | Similarity search (top 3) against an in-memory vector store for that category, using Gemini embeddings (`app/rag.py`). The small knowledge base is embedded once per process on first use. |
+| `draft` | Calls `gemini-3.1-flash-lite` (temperature 0.2, extended thinking off for speed; override with `GEMINI_MODEL`) with the ticket and retrieved context, instructing it to open with a greeting, present the grounded facts as `- ` bullet points followed by next steps, and never promise refunds. |
 | `review` | Rule-based checks: no refund promise without "escalate"/"approval", must open with a greeting (`hi`/`hello`/`hey`/`dear` as a whole word within the first 40 characters), must contain a `- ` bullet grounded in context, and must be at least 40 characters. Rejections increment `attempts`. |
 | `refine` | Appends the longer words from the reviewer feedback to the query and re-retrieves context, then loops back to `draft`. |
 | `escalate` | After two rejected drafts, appends the ticket, all drafts, reviews, queries and context to `data/escalation_log.csv`. |
@@ -36,8 +38,9 @@ State is a `TypedDict` (`app/types.py`). List fields such as `queries`, `context
 
 - Python 3.11+
 - [LangGraph](https://github.com/langchain-ai/langgraph) for the state graph and routing
-- [LangChain](https://github.com/langchain-ai/langchain) + `langchain-google-genai` for Gemini chat (`gemini-2.5-flash`) and embeddings (`models/gemini-embedding-001`)
-- [Chroma](https://github.com/chroma-core/chroma) via `langchain-chroma` as the vector store
+- [LangChain](https://github.com/langchain-ai/langchain) + `langchain-google-genai` for Gemini chat (`gemini-3.1-flash-lite`) and embeddings (`models/gemini-embedding-001`)
+- LangChain `InMemoryVectorStore` for retrieval (no disk needed, so it runs on serverless hosts)
+- FastAPI for the web demo and JSON API (`server.py`), deployed on Vercel
 - LangGraph CLI / Studio (`langgraph dev`) for local development
 
 ## Project structure
@@ -48,10 +51,12 @@ Support-Agent/
 │   ├── __init__.py
 │   ├── graph.py        # StateGraph wiring and the review routing logic
 │   ├── nodes.py        # classify / retrieve / draft / review / refine / escalate
-│   ├── rag.py          # sample knowledge base + Chroma retrieval with Gemini embeddings
+│   ├── rag.py          # sample knowledge base + in-memory retrieval with Gemini embeddings
 │   └── types.py        # TypedDict state schema
 ├── data/
 │   └── escalation_log.csv   # created at runtime by the escalate node (git-ignored)
+├── server.py           # FastAPI web demo (GET /) and JSON API (POST /api/resolve)
+├── vercel.json         # Vercel deployment config (entrypoint server:app)
 ├── .env.example
 ├── langgraph.json      # LangGraph CLI config (graph id: "agent")
 ├── pyproject.toml
@@ -86,6 +91,21 @@ Support-Agent/
    Get a key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 
 ## Running
+
+### Web demo (FastAPI)
+
+```bash
+pip install uvicorn
+uvicorn server:app --reload
+```
+
+Open http://127.0.0.1:8000 for the demo page, or call the API directly:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/resolve -H "Content-Type: application/json" \n  -d '{"subject": "Charged twice", "description": "I see two charges this month, can I get a refund?"}'
+```
+
+The response contains the outcome (`resolved` or `escalated`), category, reply, retrieved context, review results and the node trace. The public demo is rate-limited per IP (`RATE_LIMIT_PER_HOUR`, default 20).
 
 ### Option A: LangGraph Studio
 
@@ -122,7 +142,7 @@ print(result["draft"])
 print("\n".join(result["history"]))
 ```
 
-The first run creates `.chroma_<Category>/` directories in the working directory for the persisted vector stores; later runs open the existing stores and only add the sample documents if a collection is empty.
+The knowledge base is embedded on the first retrieval in each process and kept in memory; nothing is written to disk except the escalation log (path configurable with `ESCALATION_LOG`).
 
 ## Example
 

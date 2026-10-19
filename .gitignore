@@ -20,3 +20,7 @@ data/escalation_log.csv
 # Editors
 .idea/
 .vscode/
+
+.vercel
+.env*
+!.env.example

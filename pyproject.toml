@@ -5,12 +5,12 @@ description = "Support ticket resolution agent with multi-step review loop (Lang
 requires-python = ">=3.11"
 dependencies = [
   "langgraph>=0.2.35",
-  "langchain>=0.2.16",
   "langchain-core",
   "langchain-google-genai",
-  "langchain-chroma",
   "pydantic>=2.7",
-  "python-dotenv>=1.0"
+  "python-dotenv>=1.0",
+  "fastapi>=0.110",
+  "numpy"
 ]
 
 [build-system]

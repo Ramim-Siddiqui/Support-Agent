@@ -1,13 +1,9 @@
 import os
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_chroma import Chroma
-from langchain_core.documents import Document
+import threading
 
-# Gemini embeddings
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001",
-    api_key=os.getenv("GOOGLE_API_KEY")
-)
+from langchain_core.documents import Document
+from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 # Example KB (replace with real docs later)
 KB_DOCS = {
@@ -29,23 +25,31 @@ KB_DOCS = {
     ]
 }
 
-def _is_empty(store: Chroma) -> bool:
-    try:
-        return store._collection.count() == 0
-    except Exception:
-        return True
+# One in-memory vector store per category. The knowledge base is tiny, so it is
+# embedded once per process on first use (no disk needed, which also makes the
+# agent work on read-only serverless filesystems).
+_vectorstores: dict[str, InMemoryVectorStore] = {}
+_lock = threading.Lock()
 
-# Open persisted vectorstores; only add the KB docs when a collection is empty
-vectorstores = {}
-for cat, texts in KB_DOCS.items():
-    store = Chroma(persist_directory=f".chroma_{cat}", embedding_function=embeddings)
-    if _is_empty(store):
+
+def _build() -> None:
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model=os.getenv("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001"),
+        api_key=os.getenv("GOOGLE_API_KEY"),
+    )
+    for cat, texts in KB_DOCS.items():
+        store = InMemoryVectorStore(embedding=embeddings)
         store.add_documents([Document(page_content=t) for t in texts])
-    vectorstores[cat] = store
+        _vectorstores[cat] = store
+
 
 def retrieve(category: str, query: str, top_k: int = 3):
-    retriever = vectorstores.get(category)
-    if not retriever:
+    if not _vectorstores:
+        with _lock:
+            if not _vectorstores:
+                _build()
+    store = _vectorstores.get(category)
+    if not store:
         return []
-    results = retriever.similarity_search(query, k=top_k)
+    results = store.similarity_search(query, k=top_k)
     return [doc.page_content for doc in results]

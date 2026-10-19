@@ -11,6 +11,12 @@ CATEGORY_KEYWORDS: dict[Category, list[str]] = {
     "General": ["question", "how", "help", "support", "info", "policy", "sla"],
 }
 
+def _text(content) -> str:
+    """Newer Gemini models return a list of content blocks instead of a plain string."""
+    if isinstance(content, str):
+        return content
+    return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+
 def classify(state: State) -> dict:
     text = f"{state.get('subject','')} {state.get('description','')}".lower()
     best_category, best_score = "General", 0
@@ -31,8 +37,9 @@ def draft(state: State) -> dict:
     ticket = {"subject": state.get("subject",""), "description": state.get("description","")}
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
         temperature=0.2,
+        thinking_budget=0,  # short support replies do not need extended reasoning; ~3x faster
         api_key=os.getenv("GOOGLE_API_KEY")
     )
 
@@ -45,7 +52,7 @@ def draft(state: State) -> dict:
         "say you will escalate to Billing for approval.\n\n"
         f"Ticket: {ticket}\n\nContext:\n- " + "\n- ".join(context)
     )
-    msg = llm.invoke(prompt).content
+    msg = _text(llm.invoke(prompt).content)
 
     return {"draft": msg, "drafts": [msg], "history": ["draft -> generated (Gemini)"]}
 
@@ -82,7 +89,11 @@ def refine(state: State) -> dict:
     return {"queries": [new_query], "context": docs, "history": ["refine -> new docs from feedback"]}
 
 def escalate(state: State) -> dict:
-    path = pathlib.Path(__file__).resolve().parents[1] / "data/escalation_log.csv"
+    # Default: data/escalation_log.csv. Override with ESCALATION_LOG (e.g. /tmp/... on
+    # read-only serverless hosts).
+    path = pathlib.Path(os.getenv("ESCALATION_LOG") or
+                        pathlib.Path(__file__).resolve().parents[1] / "data/escalation_log.csv")
+    path.parent.mkdir(parents=True, exist_ok=True)
     exists = path.exists()
     row = {
         "subject": state.get("subject",""),
