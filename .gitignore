@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets
+.env
+
+# Local Chroma vector stores created by app/rag.py
+.chroma_*/
+
+# Runtime output written by the escalate node
+data/escalation_log.csv
+
+# Editors
+.idea/
+.vscode/

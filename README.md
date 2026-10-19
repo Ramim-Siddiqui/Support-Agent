@@ -1,86 +1,152 @@
 # Support Ticket Resolution Agent (LangGraph + Gemini)
 
-This project is a **Support Ticket Resolution Agent** built using **LangGraph** and **Google Gemini API**. It helps automate the handling and resolution of support tickets using advanced AI workflows.
+A small agentic workflow that takes a support ticket (subject + description), classifies it, retrieves relevant knowledge-base snippets, drafts a reply with Google Gemini, and then runs the draft through an automated review loop. If the draft fails review twice, the ticket is escalated and logged for a human. Built with LangGraph so the whole flow is an explicit, inspectable state graph.
 
----
+**Demo video:** https://drive.google.com/file/d/1eej4YwopIwttdGmlsldtZUGUMug5ah-s/view?usp=sharing
+
+## How it works
+
+The graph is defined in `app/graph.py` and compiled as `graph` (registered as `agent` in `langgraph.json`).
+
+```mermaid
+flowchart LR
+    S([START]) --> C[classify]
+    C --> R[retrieve]
+    R --> D[draft]
+    D --> V[review]
+    V -- approved --> E([END])
+    V -- rejected, attempts < 2 --> F[refine]
+    F --> D
+    V -- rejected, attempts >= 2 --> X[escalate]
+    X --> E
+```
+
+| Node | What it does (see `app/nodes.py`) |
+| --- | --- |
+| `classify` | Keyword matching on subject + description assigns one of `Billing`, `Technical`, `Security`, `General` (default `General`). |
+| `retrieve` | Similarity search (top 3) against the Chroma vector store for that category, using Gemini embeddings (`app/rag.py`). |
+| `draft` | Calls `gemini-1.5-flash` (temperature 0.2) with the ticket and retrieved context, instructing it to stay grounded in the context and never promise refunds. |
+| `review` | Rule-based checks: no refund promise without "escalate"/"approval", must open with a greeting (`hi`/`hello`), must contain a `- ` bullet grounded in context, and must be at least 40 characters. Rejections increment `attempts`. |
+| `refine` | Appends the longer words from the reviewer feedback to the query and re-retrieves context, then loops back to `draft`. |
+| `escalate` | After two rejected drafts, appends the ticket, all drafts, reviews, queries and context to `data/escalation_log.csv`. |
+
+State is a `TypedDict` (`app/types.py`). List fields such as `queries`, `context`, `drafts`, `reviews` and `history` use an additive reducer, so every step is accumulated and the final state contains a full trace of the run.
+
+## Tech stack
+
+- Python 3.11+
+- [LangGraph](https://github.com/langchain-ai/langgraph) for the state graph and routing
+- [LangChain](https://github.com/langchain-ai/langchain) + `langchain-google-genai` for Gemini chat (`gemini-1.5-flash`) and embeddings (`models/embedding-001`)
+- [Chroma](https://github.com/chroma-core/chroma) via `langchain-chroma` as the vector store
+- LangGraph CLI / Studio (`langgraph dev`) for local development
+
+## Project structure
+
+```
+Support-Agent/
+├── app/
+│   ├── __init__.py
+│   ├── graph.py        # StateGraph wiring and the review routing logic
+│   ├── nodes.py        # classify / retrieve / draft / review / refine / escalate
+│   ├── rag.py          # sample knowledge base + Chroma retrieval with Gemini embeddings
+│   └── types.py        # TypedDict state schema
+├── data/
+│   └── escalation_log.csv   # created at runtime by the escalate node (git-ignored)
+├── .env.example
+├── langgraph.json      # LangGraph CLI config (graph id: "agent")
+├── pyproject.toml
+└── README.md
+```
 
 ## Setup
 
-Follow these steps to set up the project locally.
+1. Create and activate a virtual environment:
 
-### 1. Create a Virtual Environment
+   ```bash
+   python -m venv .venv
+   # Windows
+   .\.venv\Scripts\activate
+   # macOS / Linux
+   source .venv/bin/activate
+   ```
 
-```bash
-python -m venv .venv
-```
-Creates a self-contained Python environment in the .venv folder.
+2. Install the project (dependencies are declared in `pyproject.toml`) and the LangGraph CLI:
 
-Keeps dependencies isolated from your system Python, preventing conflicts with other projects.
+   ```bash
+   pip install -e .
+   pip install --upgrade "langgraph-cli[inmem]"
+   ```
 
-### 2. Activate the Virtual Environment
+3. Add your Gemini API key. Copy `.env.example` to `.env` and fill in the value:
 
-**Windows:**
-```bash
-.\.venv\Scripts\activate
-```
+   ```
+   GOOGLE_API_KEY=your_google_api_key_here
+   ```
 
-**macOS / Linux:**
-```bash
-source .venv/bin/activate
-```
+   Get a key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 
-After activation, all Python packages installed will only affect this environment.
+## Running
 
-### 3. Install Project Dependencies
-```bash
-pip install --upgrade "langgraph-cli[inmem]"
-pip install langchain
-pip install google_genai
-pip install langchain_chroma
-pip install langchain_google_genai
-```
-**Explanation:**
+### Option A: LangGraph Studio
 
-langgraph-cli[inmem] → LangGraph CLI with in-memory backend.
-
-langchain → Framework for building LLM-based applications.
-
-google_genai → Google Gemini API client.
-
-langchain_chroma → Chroma database integration for LangChain.
-
-langchain_google_genai → LangChain support for Google Gemini.
-
-### 4. Install the Project Locally
-```bash
-pip install -e .
-```
-Installs the project in editable mode, so changes in your code are immediately reflected without reinstalling.
-
-### 5. Create Environment Variables File
-
-Create a new file in the project root called .env.
-
-Open .env and add your API keys and any other project-specific settings. For example:
-
-GOOGLE_API_KEY=your_google_api_key_here
-OTHER_SECRET_KEY=your_secret_key_here
-
-
-This step ensures your sensitive credentials are stored securely and not hard-coded in the project.
-
-### 6. Start LangGraph in Development Mode
 ```bash
 langgraph dev
 ```
-Launches LangGraph in development mode to test, modify, and debug your support ticket agent locally.
 
-### Summary
+This starts the local LangGraph server using `langgraph.json` (which also loads `.env`) and opens LangGraph Studio in the browser. Select the `agent` graph and submit an input such as:
 
-By following these steps, you ensure:
+```json
+{
+  "subject": "Charged twice for July invoice",
+  "description": "I was billed two times for the Pro plan. Please refund the duplicate charge."
+}
+```
 
-A clean, isolated Python environment for your project.
+Studio shows each node's state update, so you can watch the draft / review / refine loop.
 
-All required packages for LangGraph + Gemini are installed.
+### Option B: Python
 
-Your project is ready for development and testing.
+```python
+from dotenv import load_dotenv
+load_dotenv()  # must run before importing app.graph: app/rag.py reads GOOGLE_API_KEY at import time
+
+from app.graph import graph
+
+result = graph.invoke({
+    "subject": "Charged twice for July invoice",
+    "description": "I was billed two times for the Pro plan. Please refund the duplicate charge.",
+})
+
+print(result["category"])
+print(result["draft"])
+print("\n".join(result["history"]))
+```
+
+The first run creates `.chroma_<Category>/` directories in the working directory for the persisted vector stores.
+
+## Example
+
+For the billing ticket above, the run proceeds as:
+
+```
+classify -> Billing
+retrieval -> 3 docs
+draft -> generated (Gemini)
+review -> rejected
+refine -> new docs from feedback
+draft -> generated (Gemini)
+review -> rejected
+escalate -> logged to escalation_log.csv
+```
+
+The retrieved context contains "Refunds require approval from Billing; never promise refunds in replies", so Gemini drafts a reply that says it will escalate to Billing for approval rather than promising a refund. The rule-based reviewer still rejects the draft because it contains no `- ` bullet, and after two attempts the ticket is written to `data/escalation_log.csv` with every draft, review, query and context snippet attached, ready for a human agent.
+
+## Limitations / next steps
+
+- **Keyword classifier.** `classify` counts keyword hits per category; it has no fallback to the LLM and is easy to misroute. Swapping in an LLM or embedding-based classifier would be the first improvement.
+- **Heuristic reviewer.** `review` uses substring checks (for example `"hi" in draft` also matches "this"), and it requires a `- ` bullet that the draft prompt never asks for, so most drafts are rejected and escalated. Either align the prompt with the rules or replace the rules with an LLM-as-judge review.
+- **Sample knowledge base built at import time.** `app/rag.py` holds eight hard-coded snippets and rebuilds the Chroma stores every time the module is imported, so documents are re-added to the persisted `.chroma_*` directories on each import and can appear duplicated in retrieval results. A real deployment would load documents from a source and build the index once.
+- **Context accumulates across retries.** Because `context` uses an additive reducer, the second draft sees the first retrieval's documents plus the refined ones.
+- **Model names.** The code pins `gemini-1.5-flash` and `models/embedding-001`, which Google has since deprecated. Update the model IDs in `app/nodes.py` and `app/rag.py` (for example to `gemini-2.5-flash` and `gemini-embedding-001`) if API calls fail.
+- **No tests.** There is no automated test suite; unit tests for the routing function and the review rules would be straightforward to add.
+- **Escalation log is a CSV.** Fine for a demo; a queue or ticketing-system integration would replace it in practice.
