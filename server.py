@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Request  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import HTMLResponse  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
@@ -28,6 +29,16 @@ if os.getenv("VERCEL"):
     os.environ.setdefault("ESCALATION_LOG", "/tmp/escalation_log.csv")
 
 app = FastAPI(title="Support Ticket Resolution Agent", docs_url="/docs", redoc_url=None)
+
+# Let the portfolio site call the API from the browser (inline demo console).
+_default_origins = "https://ramim-siddiqui.vercel.app,http://localhost:5173,http://127.0.0.1:5173"
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", _default_origins).split(",") if o.strip()],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+    max_age=86400,
+)
 
 # Simple per-IP rate limit so the public demo cannot burn the free API quota.
 RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_HOUR", "20"))
